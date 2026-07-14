@@ -1,203 +1,138 @@
 <?php
-namespace app\controllers;
+namespace app\modules\admin\controllers;
 
-use app\models\DiaryEntries;
-use app\models\DiaryEntriesForm;
-use app\models\GroupPractices;
-use app\models\Groups;
-use app\models\Practices;
-use app\models\StudentAssignments;
-use app\models\Students;
 use Yii;
-use yii\filters\AccessControl;
+use app\models\DocumentTemplates;
+use app\models\DocumentTemplatesForm;
 use yii\web\Controller;
 use yii\web\NotFoundHttpException;
+use yii\filters\VerbFilter;
+use yii\web\UploadedFile;
+use yii\helpers\ArrayHelper;
 
-class DiaryController extends Controller
+class TemplatesController extends Controller
 {
-    /**
-     * Поведения контроллера: настройка прав доступа
-     */
-    public function behaviors()
-    {
-        return [
-            'access' => [
-                'class' => AccessControl::class,
-                'rules' => [
-                    [
-                        // Студент имеет право просматривать дневник и добавлять новые записи
-                        'actions' => ['index', 'view', 'create', 'update', 'print-template'],
-                        'allow' => true,
-                        'roles' => ['@'], // Только авторизованные
-                        'matchCallback' => function ($rule, $action) {
-                            return Yii::$app->user->identity->role === 'student';
-                        }
-                    ],
-                    [
-                        // Руководитель имеет право оценивать записи (действие evaluate)
-                        'actions' => ['index', 'view', 'evaluate'],
-                        'allow' => true,
-                        'roles' => ['@'],
-                        'matchCallback' => function ($rule, $action) {
-                            return Yii::$app->user->identity->role === 'supervisor';
-                        }
-                    ],
-                ],
-            ],
-        ];
-    }
-
-
+    public $layout = 'admin';
+    
     public function actionIndex()
     {
-        $assignmentId = Yii::$app->user->id; 
-        $entries = DiaryEntries::find()->where(['assignment_id' => $assignmentId])->orderBy(['date'=>SORT_ASC])->all();
+        $query = DocumentTemplates::find()->joinWith(['practice']);
+        
+        $sortAttribute = Yii::$app->request->get('sort', 'id'); 
+        $order = Yii::$app->request->get('order', 'ASC');
+        
+        $sortableFields = [
+            'practice_title' => 'practices.title',
+            'name'           => 'document_templates.name',
+        ];
 
-        return $this->render('index', ['entries' => $entries]);
+        if (isset($sortableFields[$sortAttribute])) {
+            $query->orderBy([$sortableFields[$sortAttribute] => $order === 'DESC' ? SORT_DESC : SORT_ASC]);
+        }
+        
+        $models = $query->all();
+        
+        return $this->render('index', [
+            'models' => $models,
+            'sortAttribute' => $sortAttribute,
+            'order' => $order,
+        ]);
     }
 
     public function actionCreate()
     {
-        $model = new DiaryEntriesForm();
-        if ($model->load(Yii::$app->request->post()) && $model->validate()) {
-            $entries = new DiaryEntries();
-            $entries->assignment_id = (int)Yii::$app->user->identity->id;
-            $entries->date = $model->date;
-            $entries->content = $model->content;
-            $entries->hours = $model->hours;
-            $entries->supervisor_comment = $model->supervisor_comment;
-            $entries->grade = $model->grade;
-            $entries->is_locked = 0;
-
-            if ($entries->save()) {
-                Yii::$app->session->setFlash('success', 'Запись успешно создана.');
-                return $this->redirect(['diary/index']);
-            } else {
-                var_dump($entries->getErrors());
-                die;
+        $model = new DocumentTemplatesForm();
+        $practices = \yii\helpers\ArrayHelper::map(\app\models\Practices::find()->all(), 'id', 'title');
+    
+        if ($model->load(Yii::$app->request->post())) {
+            // Привязываем загруженный файл к свойству формы BEFORE валидации
+            $model->file = \yii\web\UploadedFile::getInstance($model, 'file_path');
+    
+            // Валидируем форму (включая проверку расширения файла и его размера)
+            if ($model->validate()) {
+                $template = new \app\models\DocumentTemplates();
+                $template->practice_id = $model->practice_id;
+                $template->name = $model->name;
+                $template->description = $model->description;
+                $template->created_by = Yii::$app->user->id;
+    
+                // Если файл прикреплен, обрабатываем его загрузку
+                if ($model->file) {
+                    $dir = 'uploads/templates/';
+                    if (!is_dir($dir)) {
+                        mkdir($dir, 0775, true);
+                    }
+    
+                    $path = $dir . uniqid() . '_' . $model->file->name;
+                    
+                    if ($model->file->saveAs($path)) {
+                        $template->file_path = $path;
+                    }
+                }
+    
+                // Сохраняем модель в базу данных
+                if ($template->save(false)) { // false, так как форму мы уже провалидировали
+                    Yii::$app->session->addFlash('success', 'Шаблон успешно создан и файл загружен.');
+                    return $this->redirect(['index']);
+                }
             }
+            
+            // Если валидация формы провалилась, выводим ошибки
+            $errors = implode('<br>', \yii\helpers\ArrayHelper::getColumn($model->getErrors(), 0));
+            Yii::$app->session->addFlash('error', 'Ошибка валидации формы: ' . $errors);
         }
+    
         return $this->render('create', [
             'model' => $model,
+            'practices' => $practices,
         ]);
     }
 
     public function actionUpdate($id)
     {
-        $entries = DiaryEntries::findOne($id);
-        if (!$entries) {
-            throw new NotFoundHttpException('Запись не найдена.');
-        }
-        $model = new DiaryEntriesForm();
-        if ($model->load(Yii::$app->request->post()) && $model->validate()) {
-            // Обновляем поля модели
-            $entries->assignment_id = Yii::$app->user->id;
-            $entries->date = $model->date;
-            $entries->content = $model->content;
-            $entries->hours = $model->hours;
-            $entries->supervisor_comment = $model->supervisor_comment;
-            $entries->grade = $model->grade;
-            $entries->save();
+        $model = DocumentTemplates::findOne($id);
+        $oldFilePath = $model->file_path;
 
-            return $this->redirect(['index']);
-        } else {
-            // Загружаем текущие данные в модель для формы
-            $model->date = $entries->date;
-            $model->content = $entries->content;
-            $model->hours = $entries->hours;
-            $model->supervisor_comment = $entries->supervisor_comment;
-            $model->grade = $entries->grade;
+        if ($model->load(Yii::$app->request->post())) {
+            $uploadedFile = UploadedFile::getInstance($model, 'file_path');
+            if ($uploadedFile) {
+                $path = 'uploads/templates/' . uniqid() . '_' . $uploadedFile->name;
+                if ($uploadedFile->saveAs($path)) {
+                    $model->file_path = $path;
+                }
+            } else {
+                // оставить старый файл, если новый не загружен
+                $model->file_path = $oldFilePath;
+            }
+
+            if ($model->save()) {
+                Yii::$app->session->addFlash('success', 'Отчёт обновлен.');
+                return $this->redirect(['index']);
+            } else {
+                Yii::$app->session->addFlash('error', 'Ошибка при обновлении отчёта.');
+            }
         }
-        return $this->render('update', [
-            'model' => $model,
-        ]);
+
+        return $this->render('update', ['model' => $model]);
     }
 
     public function actionDelete($id)
     {
-        $model = $this->findModel($id);
+        $model = DocumentTemplates::findOne($id);
         if ($model) {
             $model->delete();
-            Yii::$app->session->setFlash('success', 'Запись удалена.');
+            Yii::$app->session->setFlash('success', 'Шаблон удалён.');
         }
         return $this->redirect(['index']);
     }
-
-    protected function findModel($id)
+    
+    public function actionTemplateView($id)
     {
-        if (($model = DiaryEntries::findOne($id)) !== null) {
-            return $model;
+        $templates = DocumentTemplates::findOne($id);
+        if (!$templates || !$templates->file_path) {
+            throw new NotFoundHttpException('Документ не найден.');
         }
-        throw new NotFoundHttpException('Страница не найдена.');
-    }
-
-    public function actionView($id)
-    {
-        $student = Students::findOne($id);
-        $diaryEntries = DiaryEntries::find()->where(['assignment_id' => $id])->all();
-
-        return $this->render('view', [
-            'student' => $student,
-            'diaryEntries' => $diaryEntries,
-        ]);
-    }
-
-    public function actionEvaluate($id) 
-    { 
-        $model = DiaryEntries::findOne($id); 
-        if (!$model) { 
-            throw new NotFoundHttpException("Запись не найдена"); 
-        } 
-    
-        // Включаем сценарий оценивания
-        $model->scenario = 'evaluate'; 
-    
-        if (Yii::$app->request->isPost) { 
-            if ($model->load(Yii::$app->request->post())) { 
-                $model->is_locked = 1; // Блокируем запись после оценки
-    
-                if ($model->save()) { 
-                    Yii::$app->session->setFlash('success', 'Оценка успешно сохранена!'); 
-                    return $this->redirect(['view', 'id' => $model->assignment_id]); 
-                } 
-                
-                // Если валидация не прошла, ошибки отобразятся в форме evaluate
-                Yii::$app->session->setFlash('error', 'Ошибка при сохранении оценки.');
-            } 
-        } 
-    
-        return $this->render('evaluate', ['model' => $model]); 
-    }
-
-    public function actionPrintTemplate($assignment_id = null)
-    {
-        // ID текущего авторизованного пользователя Yii
-        $currentUserId = Yii::$app->user->id;
-    
-        if ($assignment_id === null) {
-            // Студент - пользователь
-            $student = \app\models\Students::findOne(['user_id' => $currentUserId]);
-    
-            // Назначение практики - студент
-            $assignment = \app\models\StudentAssignments::findOne(['student_id' => $student->id]);
-        } else {
-            $assignment = \app\models\StudentAssignments::findOne($assignment_id);
-        }
-    
-        if (!$assignment) {
-            throw new \yii\web\NotFoundHttpException('Назначение не найдено.');
-        }
-    
-        // Запрос к записям дневника
-        $entries = \app\models\DiaryEntries::find()
-            ->where(['assignment_id' => $assignment->id])
-            ->orderBy(['date' => SORT_ASC])
-            ->all();
-    
-        return $this->render('print-template', [
-            'assignment' => $assignment,
-            'entries' => $entries,
-        ]);
+        return $this->render('template-view', ['templates' => $templates]);
     }
 
 }

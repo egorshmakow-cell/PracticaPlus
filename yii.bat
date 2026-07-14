@@ -1,59 +1,20 @@
-<?php
+@echo off
 
-class LoginFormCest
-{
-    public function _before(\FunctionalTester $I)
-    {
-        $I->amOnRoute('site/login');
-    }
+rem -------------------------------------------------------------
+rem  Yii command line bootstrap script for Windows.
+rem
+rem  @author Qiang Xue <qiang.xue@gmail.com>
+rem  @link https://www.yiiframework.com/
+rem  @copyright Copyright (c) 2008 Yii Software LLC
+rem  @license https://www.yiiframework.com/license/
+rem -------------------------------------------------------------
 
-    public function openLoginPage(\FunctionalTester $I)
-    {
-        $I->see('Login', 'h1');
+@setlocal
 
-    }
+set YII_PATH=%~dp0
 
-    // demonstrates `amLoggedInAs` method
-    public function internalLoginById(\FunctionalTester $I)
-    {
-        $I->amLoggedInAs(100);
-        $I->amOnPage('/');
-        $I->see('Logout (admin)');
-    }
+if "%PHP_COMMAND%" == "" set PHP_COMMAND=php.exe
 
-    // demonstrates `amLoggedInAs` method
-    public function internalLoginByInstance(\FunctionalTester $I)
-    {
-        $I->amLoggedInAs(\app\models\User::findByUsername('admin'));
-        $I->amOnPage('/');
-        $I->see('Logout (admin)');
-    }
+"%PHP_COMMAND%" "%YII_PATH%yii" %*
 
-    public function loginWithEmptyCredentials(\FunctionalTester $I)
-    {
-        $I->submitForm('#login-form', []);
-        $I->expectTo('see validations errors');
-        $I->see('Username cannot be blank.');
-        $I->see('Password cannot be blank.');
-    }
-
-    public function loginWithWrongCredentials(\FunctionalTester $I)
-    {
-        $I->submitForm('#login-form', [
-            'LoginForm[username]' => 'admin',
-            'LoginForm[password]' => 'wrong',
-        ]);
-        $I->expectTo('see validations errors');
-        $I->see('Incorrect username or password.');
-    }
-
-    public function loginSuccessfully(\FunctionalTester $I)
-    {
-        $I->submitForm('#login-form', [
-            'LoginForm[username]' => 'admin',
-            'LoginForm[password]' => 'admin',
-        ]);
-        $I->see('Logout (admin)');
-        $I->dontSeeElement('form#login-form');              
-    }
-}
+@endlocal
